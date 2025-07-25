@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 # Load model and data
 model = mujoco.MjModel.from_xml_path("scene.xml")
 data = mujoco.MjData(model)
-data_copy = mujoco.MjData(model)
 
 # PI control gains
 Kp = np.array([100, 10, 10, 50, 50, 50])  
@@ -32,7 +31,7 @@ time_history = []
 
 # Initial pose
 initial_qpos = np.copy(data.qpos[:num_joints])
-q_des = initial_qpos; 
+q_des = np.zeros(num_joints)
 
 # Initialize IK solver
 ik_solver = GaussNewtonIK(model, data)
@@ -64,8 +63,7 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
 
         target_pos = base_target + np.array([amp_x * np.sin(2 * np.pi * freq_x * t),amp_y * np.sin(2 * np.pi * freq_y * t),amp_z * np.sin(2 * np.pi * freq_z * t)])
         
-        # uncomment to use Inverse Kinematics using Gauss Newton Solver 
-        # q_des = ik_solver.solve(target_pos, body_name="wrist_3_link", q_init=data.qpos[:model.nq])
+        q_des = ik_solver.solve(target_pos, body_name="wrist_3_link", q_init=data.qpos[:model.nq])
         
         x_vel = np.array([amp_x*(2*np.pi*freq_x)*np.cos(2 * np.pi * freq_x * t), amp_y*(2*np.pi*freq_y)*np.cos(2 * np.pi * freq_y * t), amp_z*(2*np.pi*freq_z)*np.cos(2 * np.pi * freq_z * t)])
         x_acc = np.array([-amp_x *(2*np.pi*freq_x)**2*np.sin(2 * np.pi * freq_x * t),-amp_y*(2*np.pi*freq_y)**2 * np.sin(2 * np.pi * freq_y * t), -amp_z*(2*np.pi*freq_z)**2 * np.sin(2 * np.pi * freq_z * t)])
@@ -76,7 +74,6 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
         J = jacp[:, :model.nv]
         
         qd_des = np.linalg.pinv(J) @ x_vel  
-        q_des = q_des + qd_des*model.opt.timestep #integrating qd_des to get q_des 
         qdd_des = np.linalg.pinv(J) @ x_acc
         
         data.qpos[:num_joints] = q_des
@@ -160,4 +157,4 @@ for i in range(num_joints):
 plt.xlabel("Time (s)")
 plt.tight_layout()
 
-plt.savefig("tau_plot_vel.png")
+plt.savefig("tau_plot.png")
