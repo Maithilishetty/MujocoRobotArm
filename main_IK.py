@@ -3,6 +3,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 import matplotlib
+from scipy import integrate
 matplotlib.use('Agg')  # Use non-GUI backend
 import matplotlib.pyplot as plt
 
@@ -31,6 +32,7 @@ time_history = []
 
 # Initial pose
 initial_qpos = np.copy(data.qpos[:num_joints])
+base_target = np.array([0.25, 0.5, 0.5])
 q_des = np.zeros(num_joints)
 
 # Initialize IK solver
@@ -39,7 +41,6 @@ ik_solver = GaussNewtonIK(model, data)
 # Integral term
 integral_error = np.zeros(num_joints)
 sim_start = data.time
-base_target = np.array([0.25, 0.5, 0.5])
 
 # Sinusoid tracking 
 amp_x = 0.1 
@@ -53,20 +54,33 @@ body_name = "wrist_3_link"
 body_id = model.body(body_name).id
 jacp = np.zeros((3, model.nv))
 jacr = np.zeros((3, model.nv))
+const = 2*np.pi
+
+x_current = data.body(body_id).xpos.copy()
+
+# offset from the ground 
+x_base = x_current.copy()
+x_base = x_base + base_target
+
+# initialize q_des from IK at base pos
+q_des = ik_solver.solve(x_base, body_name="wrist_3_link", q_init=data.qpos[:model.nq])
+data.qpos[:num_joints] = q_des.copy()
+data.qvel[:num_joints] = 0
+
 
 with mujoco.viewer.launch_passive(model, data) as viewer:
     for _ in range(int(duration / model.opt.timestep)):
         t = data.time - sim_start
+    
+        #target_pos = base_target + np.array([amp_x * np.sin(const * freq_x * t),amp_y * np.sin(const * freq_y * t),amp_z * np.sin(const* freq_z * t)])
         
-        J_pos = np.zeros(3 * model.nv)
-        J_rot = np.zeros(3 * model.nv)
-
-        target_pos = base_target + np.array([amp_x * np.sin(2 * np.pi * freq_x * t),amp_y * np.sin(2 * np.pi * freq_y * t),amp_z * np.sin(2 * np.pi * freq_z * t)])
+        #q_des = ik_solver.solve(target_pos, body_name="wrist_3_link", q_init=data.qpos[:model.nq])
         
-        q_des = ik_solver.solve(target_pos, body_name="wrist_3_link", q_init=data.qpos[:model.nq])
+        # x_vel becomes the target velocity 
+        x_vel = np.array([amp_x*(const*freq_x)*np.cos(const* freq_x * t), amp_y*(const*freq_y)*np.cos(const * freq_y * t), amp_z*(const*freq_z)*np.cos(const * freq_z * t)])
         
-        x_vel = np.array([amp_x*(2*np.pi*freq_x)*np.cos(2 * np.pi * freq_x * t), amp_y*(2*np.pi*freq_y)*np.cos(2 * np.pi * freq_y * t), amp_z*(2*np.pi*freq_z)*np.cos(2 * np.pi * freq_z * t)])
-        x_acc = np.array([-amp_x *(2*np.pi*freq_x)**2*np.sin(2 * np.pi * freq_x * t),-amp_y*(2*np.pi*freq_y)**2 * np.sin(2 * np.pi * freq_y * t), -amp_z*(2*np.pi*freq_z)**2 * np.sin(2 * np.pi * freq_z * t)])
+        # differentiate x_vel to get x_acc 
+        x_acc = np.array([-amp_x *(const*freq_x)**2*np.sin(const* freq_x * t),-amp_y*(const*freq_y)**2 * np.sin(const * freq_y * t), -amp_z*(const*freq_z)**2 * np.sin(const* freq_z * t)])
         
         x_current = data.body(body_id).xpos.copy()
         
@@ -74,6 +88,7 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
         J = jacp[:, :model.nv]
         
         qd_des = np.linalg.pinv(J) @ x_vel  
+        q_des = q_des + qd_des*model.opt.timestep 
         qdd_des = np.linalg.pinv(J) @ x_acc
         
         data.qpos[:num_joints] = q_des
@@ -95,9 +110,10 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
 
         # Feedforward + PI controller
         data.ctrl[:num_joints] = tau + Kp * q_err + Ki * integral_error
+        print(tau)
 
         # Log
-        tau_history.append(tau.copy())
+        tau_history.append(data.ctrl[:num_joints].copy())
         q_des_history.append(q_des.copy())
         qd_des_history.append(qd_des.copy())
         q_act_history.append(q_meas.copy())
