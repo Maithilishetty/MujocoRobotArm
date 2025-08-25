@@ -1,6 +1,6 @@
 ## Mujoco Robot Arm
 
-Experiments to learn Mujoco and setting up traditional + RL controllers for a robotic arm environment within in. 
+This repository explores robotic arm control in MuJoCo using both traditional control and reinforcement learning methods.
 
 To install all the required libraries, run,  
 `pip install -r requirements.txt`
