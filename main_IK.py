@@ -26,7 +26,6 @@ qd_des_history = []
 q_act_history = []
 qd_act_history = []
 tau_history = []
-tau_history_fb = []
 time_history = []
 
 # Initial pose
@@ -65,7 +64,7 @@ x_base = x_base + base_target
 x_des_history = []
 x_act_history = []
 
-# damping factor 
+# damping factor for LM 
 lam = 1e-3
 
 # initialize q_des from IK at base pose
@@ -78,22 +77,21 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
     for _ in range(int(duration / model.opt.timestep)):
         t = data.time - sim_start
     
-        target_pos = base_target + np.array([amp_x * np.sin(const * freq_x * t),amp_y * np.sin(const * freq_y * t),amp_z * np.sin(const * freq_z * t)])
+        target_pos = base_target + np.array([amp_x*np.sin(const*freq_x*t), amp_y*np.sin(const*freq_y*t), amp_z*np.sin(const*freq_z*t)])
         
         #q_des = ik_solver.solve(target_pos, body_name="wrist_3_link", q_init=data.qpos[:model.nq])
         
         # x_vel becomes the target velocity 
-        x_vel = np.array([amp_x * (const*freq_x)*np.cos(const * freq_x * t), amp_y*(const * freq_y)*np.cos(const * freq_y * t), amp_z*(const * freq_z)*np.cos(const * freq_z * t)])
+        x_vel = np.array([amp_x*(const*freq_x)*np.cos(const*freq_x*t), amp_y*(const*freq_y)*np.cos(const*freq_y*t), amp_z*(const*freq_z)*np.cos(const*freq_z*t)])
         
         # differentiate x_vel to get x_acc 
-        x_acc = np.array([-amp_x *(const * freq_x)**2 * np.sin(const * freq_x * t),-amp_y * (const * freq_y)**2 * np.sin(const * freq_y * t), -amp_z*(const * freq_z)**2 * np.sin(const * freq_z * t)])
+        x_acc = np.array([-amp_x*(const*freq_x)**2*np.sin(const*freq_x*t), -amp_y*(const*freq_y)**2*np.sin(const*freq_y*t), -amp_z*(const*freq_z)**2*np.sin(const*freq_z*t)])
         
         x_current = data.body(body_id).xpos.copy()
         
         mujoco.mj_jac(model, data, jacp, jacr, x_current, body_id)  
         J = jacp[:, :model.nv]
-        m, n = J.shape
-        I = np.eye(m)
+        I = np.eye(J.shape[0])
         
         qd_des = J.T @ np.linalg.inv(J @ J.T + (lam**2) * I) @ x_vel  
         q_des = q_des + qd_des*model.opt.timestep 
