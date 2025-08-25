@@ -12,15 +12,13 @@ model = mujoco.MjModel.from_xml_path("scene.xml")
 data = mujoco.MjData(model)
 
 # PI control gains
-Kp = np.array([100, 10, 10, 50, 50, 50])  
+Kp = np.array([1, 1, 1, 5, 5, 5])  
+Kd = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1])
 Ki = np.array([0.5, 0.5, 0.5, 0.1, 0.1, 0.1]) 
 
 num_joints = model.nu
 
-# Sinusoidal trajectory parameters
 duration = 10.0  # simulation time in seconds
-frequency = 0.02  # Hz
-amplitude = np.deg2rad(30)  # ±30 degrees
 
 # Trajectory history buffers
 q_des_history = []
@@ -62,7 +60,14 @@ x_current = data.body(body_id).xpos.copy()
 x_base = x_current.copy()
 x_base = x_base + base_target
 
-# initialize q_des from IK at base pos
+# for cartesian position tracking 
+x_des_history = []
+x_act_history = []
+
+# damping factor for LM 
+lam = 1e-3
+
+# initialize q_des from IK at base pose
 q_des = ik_solver.solve(x_base, body_name="wrist_3_link", q_init=data.qpos[:model.nq])
 data.qpos[:num_joints] = q_des.copy()
 data.qvel[:num_joints] = 0
@@ -72,24 +77,25 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
     for _ in range(int(duration / model.opt.timestep)):
         t = data.time - sim_start
     
-        #target_pos = base_target + np.array([amp_x * np.sin(const * freq_x * t),amp_y * np.sin(const * freq_y * t),amp_z * np.sin(const* freq_z * t)])
+        target_pos = base_target + np.array([amp_x*np.sin(const*freq_x*t), amp_y*np.sin(const*freq_y*t), amp_z*np.sin(const*freq_z*t)])
         
         #q_des = ik_solver.solve(target_pos, body_name="wrist_3_link", q_init=data.qpos[:model.nq])
         
         # x_vel becomes the target velocity 
-        x_vel = np.array([amp_x*(const*freq_x)*np.cos(const* freq_x * t), amp_y*(const*freq_y)*np.cos(const * freq_y * t), amp_z*(const*freq_z)*np.cos(const * freq_z * t)])
+        x_vel = np.array([amp_x*(const*freq_x)*np.cos(const*freq_x*t), amp_y*(const*freq_y)*np.cos(const*freq_y*t), amp_z*(const*freq_z)*np.cos(const*freq_z*t)])
         
         # differentiate x_vel to get x_acc 
-        x_acc = np.array([-amp_x *(const*freq_x)**2*np.sin(const* freq_x * t),-amp_y*(const*freq_y)**2 * np.sin(const * freq_y * t), -amp_z*(const*freq_z)**2 * np.sin(const* freq_z * t)])
+        x_acc = np.array([-amp_x*(const*freq_x)**2*np.sin(const*freq_x*t), -amp_y*(const*freq_y)**2*np.sin(const*freq_y*t), -amp_z*(const*freq_z)**2*np.sin(const*freq_z*t)])
         
         x_current = data.body(body_id).xpos.copy()
         
         mujoco.mj_jac(model, data, jacp, jacr, x_current, body_id)  
         J = jacp[:, :model.nv]
+        I = np.eye(J.shape[0])
         
-        qd_des = np.linalg.pinv(J) @ x_vel  
+        qd_des = J.T @ np.linalg.inv(J @ J.T + (lam**2) * I) @ x_vel  
         q_des = q_des + qd_des*model.opt.timestep 
-        qdd_des = np.linalg.pinv(J) @ x_acc
+        qdd_des = J.T @ np.linalg.inv(J @ J.T + (lam**2) * I) @ x_acc
         
         data.qpos[:num_joints] = q_des
         data.qvel[:num_joints] = qd_des
@@ -109,10 +115,15 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
         integral_error += q_err * model.opt.timestep
 
         # Feedforward + PI controller
-        data.ctrl[:num_joints] = tau + Kp * q_err + Ki * integral_error
-        print(tau)
-
-        # Log
+        tau_fb = Kp * q_err + Kd*qd_err + Ki * integral_error
+        data.ctrl[:num_joints] = tau + tau_fb
+        
+        # get the cartesian position
+        x_act = data.body(body_id).xpos.copy()
+        
+        # Logging
+        x_des_history.append(target_pos.copy())
+        x_act_history.append(x_act.copy())
         tau_history.append(data.ctrl[:num_joints].copy())
         q_des_history.append(q_des.copy())
         qd_des_history.append(qd_des.copy())
@@ -126,13 +137,13 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
 
 # After simulation: convert lists to arrays
 tau_history = np.array(tau_history)
-rows, columns = tau_history.shape
-print(f"Matrix dimensions: {rows} rows, {columns} columns")
 q_des_history = np.array(q_des_history)
 qd_des_history = np.array(qd_des_history)
 q_act_history = np.array(q_act_history)
 qd_act_history = np.array(qd_act_history)
 time_history = np.array(time_history)
+x_des_history = np.array(x_des_history)
+x_act_history = np.array(x_act_history)
 
 # Plot results
 plt.figure(figsize=(12, 8))
@@ -174,3 +185,17 @@ plt.xlabel("Time (s)")
 plt.tight_layout()
 
 plt.savefig("tau_plot.png")
+
+plt.figure(figsize=(10, 6))
+for i, label in enumerate(["X", "Y", "Z"]):
+    plt.subplot(3, 1, i+1)
+    plt.plot(time_history, x_des_history[:, i], label=f"{label} Desired")
+    plt.plot(time_history, x_act_history[:, i], '--', label=f"{label} Actual")
+    plt.ylabel("Position (m)")
+    plt.legend()
+    if i == 0:
+        plt.title("End-Effector Cartesian Tracking")
+plt.xlabel("Time (s)")
+plt.tight_layout()
+plt.savefig("cartesian_tracking_plot.png")
+
